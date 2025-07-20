@@ -1,20 +1,18 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
+import plotly.graph_objs as go
 
 st.title("Análisis de Desplazamiento y Precipitación")
 
-# Subida del archivo Excel
 uploaded_file = st.file_uploader("Carga tu archivo Excel", type=["xlsx"])
 
 if uploaded_file is not None:
-    # Leer el archivo Excel, omitiendo las primeras filas si es necesario
     df = pd.read_excel(uploaded_file, skiprows=3)
 
     st.subheader("Datos cargados:")
     st.write(df.head())
 
-    # Intentar detectar la columna de fecha automáticamente
+    # Detectar columna de fecha
     fecha_col = None
     for col in df.columns:
         if 'fecha' in str(col).lower():
@@ -25,72 +23,105 @@ if uploaded_file is not None:
         fecha = pd.to_datetime(df[fecha_col])
         st.success(f"Columna de fecha detectada: {fecha_col}")
 
-        # Definir columnas a quitar si existen
+        # Quitar columnas innecesarias
         columnas_a_quitar = [fecha_col, 'Puntos']
         if 'rainfall (mm)' in df.columns:
             columnas_a_quitar.append('rainfall (mm)')
 
-        # Obtener dataframe solo con desplazamientos
         desplazamientos = df.drop(columns=columnas_a_quitar, errors='ignore')
-
-        # Obtener datos de lluvia si existen
         lluvia = df['rainfall (mm)'] if 'rainfall (mm)' in df.columns else None
 
-        # Convertir columnas de desplazamientos a numérico
+        # Asegurar que sean valores numéricos
         for columna in desplazamientos.columns:
             desplazamientos[columna] = pd.to_numeric(desplazamientos[columna], errors='coerce')
 
-        # Crear gráfica
-        fig, ax1 = plt.subplots(figsize=(12, 6))
+        # Crear gráfico interactivo
+        fig = go.Figure()
 
-        # Graficar desplazamientos (scatter)
         for columna in desplazamientos.columns:
-            ax1.scatter(fecha, desplazamientos[columna], label=str(columna), s=30)
-        ax1.set_xlabel("Fecha")
-        ax1.set_ylabel("Desplazamiento (cm)")
-        ax1.tick_params(axis='x', rotation=45)
+            hover_text = [
+                f"Estación: {columna}<br>Fecha: {f.date()}<br>Desplazamiento: {v:.2f} cm"
+                for f, v in zip(fecha, desplazamientos[columna])
+            ]
+            fig.add_trace(go.Scatter(
+                x=fecha,
+                y=desplazamientos[columna],
+                mode='markers+lines',
+                name=f'{columna} (cm)',
+                yaxis='y1',
+                hoverinfo='text',
+                text=hover_text
+            ))
 
-        # Eje secundario para lluvia si existe
         if lluvia is not None:
-            ax2 = ax1.twinx()
-            ax2.plot(fecha, lluvia, color='deepskyblue', linewidth=2, label='rainfall (mm)')
-            ax2.set_ylabel("Precipitación mensual (mm)")
+            hover_text_lluvia = [
+                f"Fecha: {f.date()}<br>Precipitación: {v:.2f} mm"
+                for f, v in zip(fecha, lluvia)
+            ]
+            fig.add_trace(go.Scatter(
+                x=fecha,
+                y=lluvia,
+                mode='lines+markers',
+                name='Precipitación (mm)',
+                line=dict(color='deepskyblue'),
+                yaxis='y2',
+                hoverinfo='text',
+                text=hover_text_lluvia
+            ))
 
-            # Leyendas combinadas
-            lines_1, labels_1 = ax1.get_legend_handles_labels()
-            lines_2, labels_2 = ax2.get_legend_handles_labels()
-            ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc='upper right')
-        else:
-            ax1.legend(loc='upper right')
+        fig.update_layout(
+            title="Desplazamientos vs Precipitación",
+            xaxis=dict(title='Fecha'),
+            yaxis=dict(title='Desplazamiento (cm)', side='left'),
+            yaxis2=dict(title='Precipitación (mm)', overlaying='y', side='right'),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=-0.3,
+                xanchor="center",
+                x=0.5
+            ),
+            margin=dict(b=120),
+            height=600,
+            hovermode='closest'
+        )
 
-        st.pyplot(fig)
+        st.plotly_chart(fig)
 
-        # Análisis adicional: velocidad media de desplazamiento
-        st.subheader("Análisis adicional")
+        # Análisis adicional corregido
+        st.subheader("Análisis adicional de desplazamiento")
 
         desplazamientos_mean_speed = {}
+        fecha_max_speed = {}
 
         for columna in desplazamientos.columns:
-            diff = desplazamientos[columna].diff()
-            days = fecha.diff().dt.days.fillna(1)
-            speed = (diff / days).abs()
-            velocidad_media = speed.mean()
-            desplazamientos_mean_speed[columna] = velocidad_media
+            serie = desplazamientos[columna]
+            dif = serie.diff()
+            delta_dias = fecha.diff().dt.days.fillna(1)
+            velocidad = (dif / delta_dias).abs()
 
-        st.write("Velocidad media de desplazamiento (cm/día):")
+            # Limpiar NaN
+            velocidad = velocidad.replace([float('inf'), -float('inf')], pd.NA).dropna()
+
+            velocidad_media = velocidad.mean()
+            desplazamientos_mean_speed[columna] = round(velocidad_media, 4)
+
+            if not velocidad.empty:
+                idx_max = velocidad.idxmax()
+                fecha_max = fecha[idx_max]
+                valor_max = velocidad[idx_max]
+                fecha_max_speed[columna] = (fecha_max.date(), round(valor_max, 4))
+            else:
+                fecha_max_speed[columna] = ("Sin datos", 0)
+
+        st.write("🔹 Velocidad media de desplazamiento (cm/día):")
         st.write(desplazamientos_mean_speed)
 
-        # Fecha con mayor tasa de desplazamiento
-        st.write("Fecha con mayor tasa de desplazamiento:")
-        for columna in desplazamientos.columns:
-            diff = desplazamientos[columna].diff()
-            days = fecha.diff().dt.days.fillna(1)
-            speed = (diff / days).abs()
-            max_speed = speed.max()
-            max_date = fecha[speed.idxmax()]
-            st.write(f"{columna}: {max_date.date()} → {max_speed:.4f} cm/día")
+        st.write("🔸 Fecha con mayor tasa de desplazamiento:")
+        for columna, (fecha_mayor, valor) in fecha_max_speed.items():
+            st.write(f"{columna}: {fecha_mayor} → {valor} cm/día")
 
     else:
-        st.error("No se encontró una columna de fecha. Asegúrate que tu archivo tenga una columna con 'fecha' en el nombre.")
+        st.error("❌ No se encontró una columna de fecha válida.")
 else:
-    st.info("Por favor, carga un archivo Excel para continuar.")
+    st.info("⬆️ Por favor, carga un archivo Excel para continuar.")
